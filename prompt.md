@@ -136,6 +136,40 @@ the Andromeda Galaxy. Find suitable images, save them to the references director
 credit and licence, and embed what you use. Remember the camera is outside the Milky Way: the sky
 behind it should not contain the Milky Way's own band.
 
+### Overlays (a second stage)
+
+Build the overlays only after the galaxy, the camera and the sky are finished, verified with
+captures, and committed. All overlay text is set in Michroma, from the embedded font (section 3).
+All lines (underlines, leader lines and brackets) are drawn as lines, never as text characters.
+Everything fades in and out; nothing pops.
+
+**The title.**
+- Show "The Milky Way Galaxy" in large Michroma, underlined, right-aligned in the lower-right
+  corner of the screen.
+- It is fixed to the screen like a film credit, and does not move with the camera.
+- It appears every 3 to 4 minutes, at a randomly chosen interval within that range.
+- Each time, it fades in, stays fully on screen for 10 seconds, then fades out.
+
+**The labels.**
+- There are two labels, in smaller Michroma:
+  - "Andromeda", on the Andromeda Galaxy in the background sky.
+  - "Sol", on the approximate position of our Sun in the galaxy model. The Sun orbits with the
+    disk, so this position moves with the galaxy's rotation.
+- Each label belongs to a target in 3D space. Its text and lines are placed relative to that
+  target and move with it as the camera orbits and the galaxy turns, so it reads as attached to
+  the target, not to the screen.
+- Each label appears at random times, fades in, stays for 10 seconds, and fades out.
+- The Andromeda label appears only while Andromeda is on screen. If Andromeda leaves the screen,
+  its label fades out early.
+- Each target is framed by a pair of square brackets, `[` before it and `]` after it, drawn as
+  lines.
+- Each label's text is underlined. From the end of the underline nearer the brackets, a leader
+  line runs to the nearest corner of the nearer bracket.
+
+Choose the sizes, colours, line weights, fade times and label placement for the best look, and
+keep the overlays understated: the galaxy is the subject. Give `/w` a way to force the title and
+both labels on at a given moment, so captures can show them.
+
 ## 5. Screen-saver behaviour
 
 Set the name Windows lists in Screen Saver Settings (string 1 in `the-milky-way.rc`) to
@@ -197,8 +231,11 @@ Run each check and report its actual output. Fix and re-run anything that fails.
 2. Starting the `.scr` with the argument `/x` exits with code 0 within a few seconds.
 3. Frame captures from `/w` at several times show the galaxy, its rotation between them, and the
    background sky with Andromeda. Keep the captures in `docs/captures/` and commit them.
-4. The frame rate in `/w` at 1600×900, from the log.
-5. `git status` is clean, and `git log` shows your commits on `main`.
+4. Captures of the overlays: the title in the lower right, and the Andromeda and Sol labels with
+   their brackets and leader lines. Include two captures some seconds apart, showing that a label
+   stays attached to its moving target.
+5. The frame rate in `/w` at 1600×900, from the log.
+6. `git status` is clean, and `git log` shows your commits on `main`.
 
 Do **not** run the saver with no argument, `/s` or `/c`, and do not run `/w` without
 `MILKY_WAY_CAPTURE` set: those take over the screen or need a person at the keyboard.
@@ -209,6 +246,7 @@ Finish with a short report:
 
 - The directory you created.
 - Each verification check and its result.
+- How the overlays are drawn: the text, the lines, and the 3D anchoring of the labels.
 - The rotation direction you implemented and the sources that settle it.
 - Your timescale, and how fast the centre and the arms turn on screen.
 - The benchmarks you ran and what they decided.
