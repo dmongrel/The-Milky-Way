@@ -4,6 +4,8 @@
 Operator notes (not part of the prompt; strip everything above the first rule line before use):
 - Replace every <LLM NAME> with the model's name, e.g. "qwen122b" gives the project directory
   C:\_C_Projects\The Milky Way-qwen122b.
+- Claude is the exception: its entry is C:\_C_Projects\The Milky Way itself, with no suffix
+  anywhere (the-milky-way.scr, "The Milky Way" in Settings, repo dmongrel/The-Milky-Way).
 - The prompt is given verbatim, in one piece, to every model under test, so results compare.
 - Stage 1 (this file, so far) is the scaffold only. Later stages get appended as new sections.
 -->
