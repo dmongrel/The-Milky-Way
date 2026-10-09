@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.25)
 project(TheMilkyWay LANGUAGES C CXX RC)
 
 # The executable's name, without the .scr. Each entry in the comparison renames it.
-set(SAVER_NAME the-milky-way)
+set(SAVER_NAME the-milky-way-claude)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -87,4 +87,4 @@ target_compile_options(saver PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-municode>)
 
 target_link_options(saver PRIVATE -municode -static)
-target_link_libraries(saver PRIVATE gdi32 shell32 user32)
+target_link_libraries(saver PRIVATE gdi32 shell32 user32 ole32 windowscodecs)

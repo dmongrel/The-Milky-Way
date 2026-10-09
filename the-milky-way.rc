@@ -4,7 +4,7 @@
 // String 1 is the name Windows shows in the Screen Saver Settings list.
 STRINGTABLE
 BEGIN
-    1 "The Milky Way"
+    1 "The Milky Way (claude)"
 END
 
 // The overlay typeface, Michroma (SIL Open Font License 1.1), and its licence, which the OFL
