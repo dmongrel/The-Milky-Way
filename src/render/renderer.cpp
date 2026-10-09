@@ -25,9 +25,10 @@ constexpr std::uint32_t kBloomMips      = 7;
 constexpr float         kFovY           = 0.80f;  // radians, about 46 degrees
 
 // GPU timestamps around each pass of the first window, averaged into the log: the profile that
-// decides between code paths. Stamps: start, sky, volume, stars, bloom, tonemap.
+// decides between code paths. Stamps: start, volume, sky and
+// composite, stars, bloom, tonemap.
 constexpr std::uint32_t kStamps = 6;
-const char* const       kPassNames[kStamps - 1] = {"sky", "volume", "stars", "bloom", "tonemap"};
+const char* const       kPassNames[kStamps - 1] = {"volume", "sky+composite", "stars", "bloom", "tonemap"};
 
 // Must match `Frame` in shaders/common.glsl (std140: only vec4 and mat4 members).
 struct FrameUniforms {
@@ -66,6 +67,7 @@ struct Target {
 
     Image       hdr;                       // scene radiance, with a mip chain for the bloom
     VkImageView hdrTarget = VK_NULL_HANDLE;  // mip 0 alone, for rendering into
+    Image       volume;                    // the marched volume (light, transmittance), reduced
 
     VkPipeline      tonemap       = VK_NULL_HANDLE;
     VkFormat        tonemapFormat = VK_FORMAT_UNDEFINED;
@@ -119,6 +121,8 @@ private:
     VkSampler             repeat_     = VK_NULL_HANDLE;
     VkPipeline            sky_        = VK_NULL_HANDLE;
     VkPipeline            volume_     = VK_NULL_HANDLE;
+    VkPipeline            composite_  = VK_NULL_HANDLE;
+    std::uint32_t         volumeScale_ = 2;  // the volume is marched at 1/scale resolution
     VkPipeline            stars_      = VK_NULL_HANDLE;
     std::vector<std::pair<std::string, VkShaderModule>> modules_;
 
@@ -275,10 +279,11 @@ bool VulkanRenderer::Init() {
         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setInfo.bindingCount = 5;
+    setInfo.bindingCount = 6;
     setInfo.pBindings    = bindings;
     vkCreateDescriptorSetLayout(device, &setInfo, nullptr, &setLayout_);
 
@@ -291,7 +296,7 @@ bool VulkanRenderer::Init() {
     constexpr std::uint32_t    kMaxSets = 64;  // windows x frames in flight; plenty for any desk
     const VkDescriptorPoolSize sizes[]  = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxSets},
                                            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxSets},
-                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSets * 3}};
+                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSets * 4}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -312,9 +317,18 @@ bool VulkanRenderer::Init() {
     vkCreateSampler(device, &sampler, nullptr, &repeat_);
 
     sky_    = MakePipeline("fullscreen.vert", "sky.frag", kHdrFormat, Blend::None, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    volume_ = MakePipeline("fullscreen.vert", "volume.frag", kHdrFormat, Blend::Volume, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    volume_ = MakePipeline("fullscreen.vert", "volume.frag", kHdrFormat, Blend::None, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    composite_ = MakePipeline("fullscreen.vert", "composite.frag", kHdrFormat, Blend::Volume,
+                              VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     stars_  = MakePipeline("stars.vert", "stars.frag", kHdrFormat, Blend::Additive, VK_PRIMITIVE_TOPOLOGY_POINT_LIST);
-    if (!sky_ || !volume_ || !stars_) return false;
+    if (!sky_ || !volume_ || !composite_ || !stars_) return false;
+
+    // MILKY_WAY_VOLUME_SCALE=1 marches the volume at full resolution, for comparison.
+    wchar_t scale[8];
+    if (GetEnvironmentVariableW(L"MILKY_WAY_VOLUME_SCALE", scale, 8) > 0) {
+        volumeScale_ = std::clamp<std::uint32_t>(static_cast<std::uint32_t>(_wtoi(scale)), 1u, 4u);
+    }
+    app::Log("volume at 1/%u resolution", volumeScale_);
 
     // The star catalogue: built once, then moved entirely on the GPU from the simulation time.
     LARGE_INTEGER t0{}, t1{}, freq{};
@@ -402,7 +416,7 @@ VulkanRenderer::~VulkanRenderer() {
     ctx_->Destroy(starBuffer_);
     ctx_->Destroy(deepField_);
     ctx_->Destroy(andromeda_);
-    for (VkPipeline p : {sky_, volume_, stars_}) {
+    for (VkPipeline p : {sky_, volume_, composite_, stars_}) {
         if (p) vkDestroyPipeline(device, p, nullptr);
     }
     for (auto& [name, m] : modules_) vkDestroyShaderModule(device, m, nullptr);
@@ -607,6 +621,8 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
     target.format           = kHdrFormat;
     target.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCreateImageView(device, &target, nullptr, &t.hdrTarget);
+    t.volume = ctx_->CreateImage({std::max(extent.width / volumeScale_, 1u), std::max(extent.height / volumeScale_, 1u)},
+                                 kHdrFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
     if (t.tonemapFormat != t.format) {
         if (t.tonemap) vkDestroyPipeline(device, t.tonemap, nullptr);
@@ -621,9 +637,10 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
         VkDescriptorImageInfo  deep{repeat_, deepField_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  m31{clamp_, andromeda_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  hdr{clamp_, t.hdr.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo  volume{clamp_, t.volume.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-        VkWriteDescriptorSet writes[5]{};
-        for (std::uint32_t i = 0; i < 5; ++i) {
+        VkWriteDescriptorSet writes[6]{};
+        for (std::uint32_t i = 0; i < 6; ++i) {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = t.sets[f];
             writes[i].dstBinding      = i;
@@ -639,7 +656,9 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
         writes[3].pImageInfo     = &m31;
         writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[4].pImageInfo     = &hdr;
-        vkUpdateDescriptorSets(device, 5, writes, 0, nullptr);
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].pImageInfo     = &volume;
+        vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
     }
 
     t.stale = false;
@@ -659,6 +678,7 @@ void VulkanRenderer::DestroySwapchain(Target& t) {
     if (t.hdrTarget) vkDestroyImageView(device, t.hdrTarget, nullptr);
     t.hdrTarget = VK_NULL_HANDLE;
     ctx_->Destroy(t.hdr);
+    ctx_->Destroy(t.volume);
     if (t.swapchain) vkDestroySwapchainKHR(device, t.swapchain, nullptr);
     t.swapchain = VK_NULL_HANDLE;
 }
@@ -762,7 +782,36 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     const VkViewport viewport{0, 0, float(t.extent.width), float(t.extent.height), 0, 1};
     const VkRect2D   scissor{{0, 0}, t.extent};
 
-    // 1. The scene, in linear HDR: sky, then the glowing and absorbing volume, then the stars.
+    if (first && queries_) vkCmdResetQueryPool(cmd, queries_, frame_ * kStamps, kStamps);
+    Stamp(cmd, first, 0);
+
+    // 1. The volume, marched at reduced resolution into its own image: (light, transmittance).
+    const VkViewport lowViewport{0, 0, float(t.volume.extent.width), float(t.volume.extent.height), 0, 1};
+    const VkRect2D   lowScissor{{0, 0}, t.volume.extent};
+    Transition(cmd, t.volume.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo low{};
+    low.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    low.imageView   = t.volume.view;
+    low.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    low.loadOp      = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    low.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo lowPass{};
+    lowPass.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    lowPass.renderArea           = lowScissor;
+    lowPass.layerCount           = 1;
+    lowPass.colorAttachmentCount = 1;
+    lowPass.pColorAttachments    = &low;
+    vkCmdBeginRendering(cmd, &lowPass);
+    vkCmdSetViewport(cmd, 0, 1, &lowViewport);
+    vkCmdSetScissor(cmd, 0, 1, &lowScissor);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &t.sets[frame_], 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volume_);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    Transition(cmd, t.volume.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    Stamp(cmd, first, 1);
+
+    // 2. The scene, in linear HDR: sky, the volume laid over it, then the stars.
     Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0, 1);
     VkRenderingAttachmentInfo scene{};
     scene.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -777,16 +826,13 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     pass.colorAttachmentCount = 1;
     pass.pColorAttachments    = &scene;
 
-    if (first && queries_) vkCmdResetQueryPool(cmd, queries_, frame_ * kStamps, kStamps);
-    Stamp(cmd, first, 0);
     vkCmdBeginRendering(cmd, &pass);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &t.sets[frame_], 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_);
     vkCmdDraw(cmd, 3, 1, 0, 0);
-    Stamp(cmd, first, 1);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volume_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, composite_);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     Stamp(cmd, first, 2);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, stars_);
@@ -794,7 +840,7 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     vkCmdEndRendering(cmd);
     Stamp(cmd, first, 3);
 
-    // 2. A mip chain of the scene for the bloom, by successive linear blits.
+    // 3. A mip chain of the scene for the bloom, by successive linear blits.
     Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 1);
     std::int32_t w = std::int32_t(t.extent.width), h = std::int32_t(t.extent.height);
     for (std::uint32_t mip = 1; mip < t.hdr.mips; ++mip) {
@@ -813,7 +859,7 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     Stamp(cmd, first, 4);
 
-    // 3. Tonemap into the swapchain image.
+    // 4. Tonemap into the swapchain image.
     VkImage image = t.images[t.imageIndex];
     Transition(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     VkRenderingAttachmentInfo out{};
@@ -829,7 +875,7 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     vkCmdEndRendering(cmd);
     Stamp(cmd, first, 5);
 
-    // 4. A capture copies the finished image out before it is presented.
+    // 5. A capture copies the finished image out before it is presented.
     const VkImageLayout finalLayout =
         t.offscreen ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     if (!t.captureTo.empty() && t.canCapture) {
