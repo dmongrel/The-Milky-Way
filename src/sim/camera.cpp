@@ -23,7 +23,7 @@ CameraPose OrbitCamera(double seconds) {
     // never backwards.
     const double azimuth   = 0.6 + kTwoPi * seconds / 420.0;
     const double elevation = (38.0 + 22.0 * std::sin(kTwoPi * seconds / 170.0)) * kTwoPi / 360.0;
-    const double distance  = 34.0 + 9.0 * std::sin(kTwoPi * seconds / 230.0 + 1.0);
+    const double distance  = 29.0 + 8.0 * std::sin(kTwoPi * seconds / 230.0 + 1.0);
 
     CameraPose pose;
     pose.eye = {static_cast<float>(distance * std::cos(elevation) * std::cos(azimuth)),

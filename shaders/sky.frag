@@ -52,7 +52,7 @@ vec3 haloStars(vec3 d, float cells, float density, float seed) {
     // Size of one pixel, in cell units, so the stars stay sharp at any resolution.
     float pixel  = cells * 2.0 / frame.render.y;
     float r      = length(uv - centre) / pixel;
-    float bright = pow(h.y, 6.0) * 2.5 + 0.05;
+    float bright = pow(h.y, 10.0) * 3.0 + 0.03;
     vec3  tint   = mix(vec3(1.0, 0.82, 0.62), vec3(0.75, 0.85, 1.0), hash22(cell + 7.0).x);
     return tint * bright * exp(-r * r * 1.6);
 }
@@ -90,8 +90,8 @@ vec3 andromedaGalaxy(vec3 d) {
 void main() {
     vec3 d = viewRay(vUV);
     vec3 sky = vec3(0.0);
-    sky += haloStars(d, 70.0, 0.55, 0.0);
-    sky += haloStars(d, 190.0, 0.35, 3.1) * 0.5;
+    sky += haloStars(d, 70.0, 0.16, 0.0);
+    sky += haloStars(d, 190.0, 0.22, 3.1) * 0.3;
     sky += distantGalaxies(d);
     sky += andromedaGalaxy(d);
     outColor = vec4(sky * 0.08, 1.0);

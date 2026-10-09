@@ -79,10 +79,12 @@ void main() {
         if (pop == POP_YOUNG) {
             luminosity *= smoothstep(0.0, 0.05, x) * (1.0 - smoothstep(0.45, 1.0, x));
             size = c.z;
+            luminosity *= 0.5;  // the arms' blue light is mostly the volume's glow; these are its brightest
         } else {
             // HII regions shine only while their stars are newborn.
             luminosity *= smoothstep(0.0, 0.04, x) * (1.0 - smoothstep(0.12, 0.35, x));
             soft = 1.0;
+            luminosity *= 4.0;  // spread over a resolved cloud, so it needs more to show
         }
         if (luminosity <= 0.0) {
             cull();
@@ -94,7 +96,7 @@ void main() {
         if (pop == POP_DISK) {
             float r = a.x;
             ArmField arm = armField(r, theta);
-            luminosity *= 0.65 + 1.0 * arm.old + 0.5 * arm.young;
+            luminosity *= (0.65 + 1.0 * arm.old + 0.5 * arm.young) * 0.6;  // the smooth disk light is the volume's
         }
     }
 
@@ -112,7 +114,7 @@ void main() {
     float scale = frame.viewport.y / 1080.0;
     float px;
     if (soft > 0.0) {
-        px = max(frame.render.y * 0.012 * c.z / dist, 2.0 * scale);
+        px = max(frame.render.y * 0.05 * c.z / dist, 3.0 * scale);
     } else {
         px = max(1.8 * scale * size, 1.0);
     }

@@ -20,7 +20,7 @@ const int   STEPS_THICK = 12;
 
 const vec3 OLD_COLOUR    = vec3(1.00, 0.80, 0.58);
 const vec3 BULGE_COLOUR  = vec3(1.00, 0.74, 0.48);
-const vec3 YOUNG_COLOUR  = vec3(0.50, 0.66, 1.00);
+const vec3 YOUNG_COLOUR  = vec3(0.40, 0.58, 1.00);
 const vec3 HII_COLOUR    = vec3(1.00, 0.30, 0.45);
 const vec3 DUST_ALBEDO   = vec3(0.55, 0.42, 0.32);  // light the dust scatters back: brownish lanes
 
@@ -69,16 +69,17 @@ vec3 emissionAndDust(vec3 p, out float dust) {
     float nucleus = exp(-length(p) / 0.09) * 6.0;
     light += BULGE_COLOUR * (bulge + longBar + nucleus);
 
-    // Young stars and glowing gas in the arms, clumpy and moving with the gas.
+    // Young stars, glowing gas and dust, all clumped by one noise that moves with the gas. Away
+    // from the thin layer none of them is left, and the noise is the expensive part.
+    dust = 0.0;
+    if (abs(p.z) > 0.45) return light;
+    float clumps = flowNoise(p, r, theta, 2.0, 3);
+    dust = dustDensity(p, r, arm, clumps);
     if (arm.young > 0.01) {
-        float clumps = flowNoise(p, r, theta, 2.3, 3);
         float young = arm.young * sech2(p.z / 0.10) * exp(-r / 9.0);
-        light += YOUNG_COLOUR * young * (0.25 + 1.6 * clumps * clumps) * 0.55;
+        light += YOUNG_COLOUR * young * (0.25 + 1.6 * clumps * clumps) * 1.5;
         float hii = pow(clamp(clumps * 1.25 - 0.25, 0.0, 1.0), 6.0);
-        light += HII_COLOUR * young * hii * 5.0;
-        dust = dustDensity(p, r, theta, arm);
-    } else {
-        dust = dustDensity(p, r, theta, arm);
+        light += HII_COLOUR * young * hii * 9.0;
     }
     return light;
 }
@@ -125,5 +126,5 @@ void main() {
     } else {
         march(ro, rd, thick.x, thick.y, STEPS_THICK, jitter, light, trans);
     }
-    outColor = vec4(light * 0.05, trans);
+    outColor = vec4(light * 0.25, trans);
 }

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -22,6 +23,11 @@ constexpr std::uint32_t kFramesInFlight = 2;
 constexpr VkFormat      kHdrFormat      = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr std::uint32_t kBloomMips      = 7;
 constexpr float         kFovY           = 0.80f;  // radians, about 46 degrees
+
+// GPU timestamps around each pass of the first window, averaged into the log: the profile that
+// decides between code paths. Stamps: start, sky, volume, stars, bloom, tonemap.
+constexpr std::uint32_t kStamps = 6;
+const char* const       kPassNames[kStamps - 1] = {"sky", "volume", "stars", "bloom", "tonemap"};
 
 // Must match `Frame` in shaders/common.glsl (std140: only vec4 and mat4 members).
 struct FrameUniforms {
@@ -98,8 +104,10 @@ private:
     void           DestroySwapchain(Target& t);
     void           DestroyTarget(Target& t);
     void           FillUniforms(const Target& t, double seconds, FrameUniforms& u) const;
-    void           Record(VkCommandBuffer cmd, Target& t);
+    void           Record(VkCommandBuffer cmd, Target& t, bool first);
     void           FinishCaptures();
+    void           Stamp(VkCommandBuffer cmd, bool first, std::uint32_t index);
+    void           CollectStamps();
     Image          LoadTexture(int resourceId);
 
     std::unique_ptr<Context> ctx_;
@@ -122,6 +130,11 @@ private:
     VkCommandPool   framePool_ = VK_NULL_HANDLE;
     VkCommandBuffer commands_[kFramesInFlight]{};
     VkFence         fences_[kFramesInFlight]{};
+    VkQueryPool     queries_ = VK_NULL_HANDLE;
+    bool            stamped_[kFramesInFlight]{};
+    double          passMs_[kStamps - 1]{};
+    std::uint32_t   passFrames_ = 0;
+    float           tickNs_     = 1.0f;
     std::uint32_t   frame_      = 0;
     std::uint64_t   frameCount_ = 0;
 
@@ -335,7 +348,47 @@ bool VulkanRenderer::Init() {
         f.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         vkCreateFence(device, &f, nullptr, &fence);
     }
+
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(ctx_->physical(), &props);
+    if (props.limits.timestampComputeAndGraphics) {
+        tickNs_ = props.limits.timestampPeriod;
+        VkQueryPoolCreateInfo q{};
+        q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        q.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = kStamps * kFramesInFlight;
+        vkCreateQueryPool(device, &q, nullptr, &queries_);
+    }
     return true;
+}
+
+void VulkanRenderer::Stamp(VkCommandBuffer cmd, bool first, std::uint32_t index) {
+    if (!first || !queries_) return;
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queries_, frame_ * kStamps + index);
+}
+
+// Called once this frame slot's fence has signalled, so its stamps are ready.
+void VulkanRenderer::CollectStamps() {
+    if (!queries_ || !stamped_[frame_]) return;
+    std::uint64_t ticks[kStamps]{};
+    if (vkGetQueryPoolResults(ctx_->device(), queries_, frame_ * kStamps, kStamps, sizeof(ticks), ticks,
+                              sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) {
+        return;
+    }
+    for (std::uint32_t i = 0; i + 1 < kStamps; ++i) passMs_[i] += double(ticks[i + 1] - ticks[i]) * tickNs_ * 1e-6;
+    if (++passFrames_ == 300) {
+        char line[256];
+        int  n = 0;
+        double total = 0.0;
+        for (std::uint32_t i = 0; i + 1 < kStamps; ++i) {
+            n += std::snprintf(line + n, sizeof(line) - n, " %s %.2f", kPassNames[i], passMs_[i] / passFrames_);
+            total += passMs_[i] / passFrames_;
+        }
+        app::Log("gpu ms (%ux%u):%s, total %.2f", targets_.empty() ? 0 : targets_.front()->extent.width,
+                 targets_.empty() ? 0 : targets_.front()->extent.height, line, total);
+        for (double& ms : passMs_) ms = 0.0;
+        passFrames_ = 0;
+    }
 }
 
 VulkanRenderer::~VulkanRenderer() {
@@ -344,6 +397,7 @@ VulkanRenderer::~VulkanRenderer() {
     for (auto& t : targets_) DestroyTarget(*t);
     targets_.clear();
     for (auto fence : fences_) vkDestroyFence(device, fence, nullptr);
+    if (queries_) vkDestroyQueryPool(device, queries_, nullptr);
     if (framePool_) vkDestroyCommandPool(device, framePool_, nullptr);
     ctx_->Destroy(starBuffer_);
     ctx_->Destroy(deepField_);
@@ -704,7 +758,7 @@ void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms
     u.m31Up[3]    = 1.0f;
 }
 
-void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
+void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     const VkViewport viewport{0, 0, float(t.extent.width), float(t.extent.height), 0, 1};
     const VkRect2D   scissor{{0, 0}, t.extent};
 
@@ -723,17 +777,22 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
     pass.colorAttachmentCount = 1;
     pass.pColorAttachments    = &scene;
 
+    if (first && queries_) vkCmdResetQueryPool(cmd, queries_, frame_ * kStamps, kStamps);
+    Stamp(cmd, first, 0);
     vkCmdBeginRendering(cmd, &pass);
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &t.sets[frame_], 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    Stamp(cmd, first, 1);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volume_);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    Stamp(cmd, first, 2);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, stars_);
     vkCmdDraw(cmd, starCount_, 1, 0, 0);
     vkCmdEndRendering(cmd);
+    Stamp(cmd, first, 3);
 
     // 2. A mip chain of the scene for the bloom, by successive linear blits.
     Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 0, 1);
@@ -752,6 +811,7 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
         Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mip, 1);
     }
     Transition(cmd, t.hdr.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    Stamp(cmd, first, 4);
 
     // 3. Tonemap into the swapchain image.
     VkImage image = t.images[t.imageIndex];
@@ -767,6 +827,7 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, t.tonemap);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
+    Stamp(cmd, first, 5);
 
     // 4. A capture copies the finished image out before it is presented.
     const VkImageLayout finalLayout =
@@ -791,6 +852,8 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
 void VulkanRenderer::RenderFrame(double seconds) {
     VkDevice device = ctx_->device();
     vkWaitForFences(device, 1, &fences_[frame_], VK_TRUE, UINT64_MAX);
+    CollectStamps();
+    stamped_[frame_] = false;
 
     std::vector<VkSemaphore>          waits;
     std::vector<VkPipelineStageFlags> waitStages;
@@ -842,8 +905,12 @@ void VulkanRenderer::RenderFrame(double seconds) {
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &begin);
+    bool first = true;
     for (auto& t : targets_) {
-        if (t->drawing) Record(cmd, *t);
+        if (!t->drawing) continue;
+        Record(cmd, *t, first);
+        stamped_[frame_] |= first && queries_;
+        first = false;
     }
     vkEndCommandBuffer(cmd);
 

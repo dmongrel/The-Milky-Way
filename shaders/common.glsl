@@ -140,17 +140,18 @@ ArmField armField(float r, float theta) {
 
 // Dust density, in units of optical depth per kpc. Used both by the volume and by each star's
 // extinction, so a star behind a lane is dimmed by the lane you can see.
-float dustDensity(vec3 p, float r, float theta, ArmField field) {
+// `clumps` is flowNoise at about 2 cycles per kpc; callers that already have it pass it in.
+float dustDensity(vec3 p, float r, ArmField field, float clumps) {
     float disk = 0.25 * exp(-r / 5.0) * smoothstep(2.5, 4.5, r) * (1.0 - smoothstep(14.0, 18.0, r));
     float vertical = sech2(p.z / 0.09);
-    float clumps = flowNoise(p, r, theta, 1.6, 3);
-    float lane = field.dust * (0.4 + 1.5 * smoothstep(0.35, 0.75, clumps));
+    float lane = field.dust * (0.6 + 2.6 * smoothstep(0.35, 0.75, clumps));
     float nuclear = 1.4 * exp(-r / 0.18);  // the Central Molecular Zone
-    return 3.2 * (disk * (0.5 + clumps) + lane + nuclear) * vertical;
+    return 9.0 * (disk * (0.5 + clumps) + lane + nuclear) * vertical;
 }
 
 float dustDensity(vec3 p) {
     float r = length(p.xy);
     float theta = atan(p.y, p.x);
-    return dustDensity(p, r, theta, armField(r, theta));
+    if (abs(p.z) > 0.45) return 0.0;  // sech2 of 5 scale heights: nothing left
+    return dustDensity(p, r, armField(r, theta), flowNoise(p, r, theta, 2.0, 3));
 }
