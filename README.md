@@ -11,11 +11,15 @@ prompt, and no screen-saver code of its own. Each model under test copies it to
 ## Running a model
 
 1. Replace every `<LLM NAME>` in [prompt.md](prompt.md) with the model's name. `qwen122b` gives
-   the project `C:\_C_Projects\The Milky Way-qwen122b` and the repo `dmongrel/The-Milky-Way-qwen122b`.
+   the project `C:\_C_Projects\The Milky Way-qwen122b`.
 2. Give the model the whole prompt, unchanged otherwise.
 
-The prompt tells the model to copy this template, set up git and a private GitHub repo, build the
-first stage, verify it, and report.
+The prompt tells the model to copy this template, work autonomously, build the galaxy simulation
+with local git only, verify it with frame captures, and report. Entries are pushed to GitHub at
+the end, if they earn it.
+
+Research the models gather from the web goes to the shared directory
+`C:\_C_Projects\The Milky Way References`, so every model can use it.
 
 ## What the template contains
 
