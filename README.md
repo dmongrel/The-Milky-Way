@@ -33,6 +33,17 @@ template and [prompt.md](prompt.md) as one entry in The Milky Way comparison.
   procedurally. Andromeda sits where it really is (l = 121.2°, b = −21.6°), drawn five times its
   true size. The camera is outside the Galaxy, so the sky has no Milky Way band.
 
+- **Overlays** are set in Michroma.
+  - A film-credit title, "The Milky Way Galaxy", underlined in the lower right. It fades in every
+    3 to 4 minutes, holds for 10 s, then fades out.
+  - Labels for **Andromeda** and **Sol** (the Sun) appear at random times for 10 s. Each target
+    is framed by drawn brackets, with an underlined name and a leader line from the underline to
+    the nearest bracket corner.
+  - The labels are anchored in 3D: Sol's brackets ride the Sun round its orbit and scale with
+    distance, and Andromeda's frame its billboard.
+  - A label shows only while its target is on screen, and fades early if the target leaves.
+  - See [docs/captures/overlay-0.png](docs/captures/overlay-0.png).
+
 All the research behind these choices is in the shared `C:\_C_Projects\The Milky Way References`,
 and the physics note there gives every source.
 
@@ -61,6 +72,7 @@ All are environment variables. With none set, the saver behaves as a plain scree
 | `MILKY_WAY_TIME`         | Start the clock this many seconds in.                                  |
 | `MILKY_WAY_OFFSCREEN`    | Draw into an offscreen image instead of the window, unthrottled. This happens anyway when a window's surface can't be queried. |
 | `MILKY_WAY_VOLUME_SCALE` | March the volume at 1/n resolution (default 2; 1 for full).            |
+| `MILKY_WAY_OVERLAYS`     | The title and both labels on all the time (labels still need their target on screen), for captures. |
 | `MILKY_WAY_VALIDATION`   | Enable the Vulkan validation layer.                                    |
 
 `tools/capture.sh <prefix> <t>...` writes captures to `docs/captures/`. `tools/bench.sh` prints

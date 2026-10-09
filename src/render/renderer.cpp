@@ -3,6 +3,7 @@
 #include "app/log.h"
 #include "render/context.h"
 #include "render/image_io.h"
+#include "render/overlay.h"
 #include "render/shaders_embedded.h"
 #include "resource.h"
 #include "sim/camera.h"
@@ -23,6 +24,7 @@ constexpr std::uint32_t kFramesInFlight = 2;
 constexpr VkFormat      kHdrFormat      = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr std::uint32_t kBloomMips      = 7;
 constexpr float         kFovY           = 0.80f;  // radians, about 46 degrees
+constexpr std::uint32_t kOverlayVertices = 4096;  // a frame's overlay quads use a few hundred
 
 // GPU timestamps around each pass of the first window, averaged into the log: the profile that
 // decides between code paths. Stamps: start, volume, sky and
@@ -45,7 +47,7 @@ struct FrameUniforms {
     float m31Up[4];
 };
 
-enum class Blend { None, Volume, Additive };
+enum class Blend { None, Volume, Additive, Alpha };
 
 struct Target {
     HWND           hwnd    = nullptr;
@@ -72,6 +74,9 @@ struct Target {
     VkPipeline      tonemap       = VK_NULL_HANDLE;
     VkFormat        tonemapFormat = VK_FORMAT_UNDEFINED;
     Buffer          uniforms[kFramesInFlight];
+    Buffer          overlay[kFramesInFlight];  // this frame's overlay quads
+    std::uint32_t   overlayCount = 0;
+    VkPipeline      overlayPipeline = VK_NULL_HANDLE;
     VkDescriptorSet sets[kFramesInFlight]{};
 
     std::uint32_t imageIndex = 0;
@@ -105,9 +110,10 @@ private:
     void           BuildFrameResources(Target& t);
     void           DestroySwapchain(Target& t);
     void           DestroyTarget(Target& t);
-    void           FillUniforms(const Target& t, double seconds, FrameUniforms& u) const;
+    void           FillUniforms(const Target& t, double seconds, FrameUniforms& u, OverlayView& o) const;
     void           Record(VkCommandBuffer cmd, Target& t, bool first);
     void           FinishCaptures();
+    void           BuildOverlay(Target& t, const OverlayView& view);
     void           Stamp(VkCommandBuffer cmd, bool first, std::uint32_t index);
     void           CollectStamps();
     Image          LoadTexture(int resourceId);
@@ -130,6 +136,9 @@ private:
     std::uint32_t starCount_ = 0;
     Image         deepField_;
     Image         andromeda_;
+    Image         textAtlas_;
+    std::unique_ptr<OverlayDirector> overlays_;
+    std::vector<OverlayVertex>       overlayScratch_;
 
     VkCommandPool   framePool_ = VK_NULL_HANDLE;
     VkCommandBuffer commands_[kFramesInFlight]{};
@@ -211,6 +220,10 @@ VkPipeline VulkanRenderer::MakePipeline(const char* vert, const char* frag, VkFo
         attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
         // Volume: the march returns (light, transmittance); what was behind is dimmed by it.
         attachment.dstColorBlendFactor = blend == Blend::Volume ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ONE;
+        if (blend == Blend::Alpha) {  // the overlays, over the finished image
+            attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        }
     }
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -280,10 +293,12 @@ bool VulkanRenderer::Init() {
         {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setInfo.bindingCount = 6;
+    setInfo.bindingCount = 8;
     setInfo.pBindings    = bindings;
     vkCreateDescriptorSetLayout(device, &setInfo, nullptr, &setLayout_);
 
@@ -295,8 +310,8 @@ bool VulkanRenderer::Init() {
 
     constexpr std::uint32_t    kMaxSets = 64;  // windows x frames in flight; plenty for any desk
     const VkDescriptorPoolSize sizes[]  = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxSets},
-                                           {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxSets},
-                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSets * 4}};
+                                           {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxSets * 2},
+                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSets * 5}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -343,6 +358,23 @@ bool VulkanRenderer::Init() {
     app::Log("stars: %u generated in %.0f ms", starCount_, 1000.0 * (t1.QuadPart - t0.QuadPart) / freq.QuadPart);
 
     deepField_ = LoadTexture(IDR_DEEP_FIELD);
+
+    // Overlay text, set once in Michroma. Without it (no font, GDI trouble) the overlays are off,
+    // but a 1x1 texture still fills the binding.
+    TextAtlas atlas = BuildTextAtlas();
+    const bool haveText = !atlas.rgba.empty();
+    if (!haveText) {
+        atlas.width = atlas.height = 1;
+        atlas.rgba.assign(4, 0);
+    }
+    std::uint32_t atlasMips = 1;
+    while ((std::max(atlas.width, atlas.height) >> atlasMips) > 0) ++atlasMips;
+    textAtlas_ = ctx_->CreateImage({atlas.width, atlas.height}, VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                   atlasMips);
+    ctx_->UploadTexture(textAtlas_, atlas.rgba.data());
+    if (haveText) overlays_ = std::make_unique<OverlayDirector>(atlas);
     andromeda_ = LoadTexture(IDR_ANDROMEDA);
 
     VkCommandPoolCreateInfo cmdPool{};
@@ -416,6 +448,7 @@ VulkanRenderer::~VulkanRenderer() {
     ctx_->Destroy(starBuffer_);
     ctx_->Destroy(deepField_);
     ctx_->Destroy(andromeda_);
+    ctx_->Destroy(textAtlas_);
     for (VkPipeline p : {sky_, volume_, composite_, stars_}) {
         if (p) vkDestroyPipeline(device, p, nullptr);
     }
@@ -452,6 +485,7 @@ bool VulkanRenderer::Attach(HWND hwnd) {
         s.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         vkCreateSemaphore(device, &s, nullptr, &t->acquired[f]);
         t->uniforms[f] = ctx_->CreateBuffer(sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        t->overlay[f]  = ctx_->CreateBuffer(kOverlayVertices * sizeof(OverlayVertex), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 
         VkDescriptorSetAllocateInfo alloc{};
         alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -628,6 +662,9 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
         if (t.tonemap) vkDestroyPipeline(device, t.tonemap, nullptr);
         t.tonemap       = MakePipeline("fullscreen.vert", "tonemap.frag", t.format, Blend::None,
                                        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        if (t.overlayPipeline) vkDestroyPipeline(device, t.overlayPipeline, nullptr);
+        t.overlayPipeline = MakePipeline("overlay.vert", "overlay.frag", t.format, Blend::Alpha,
+                                         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         t.tonemapFormat = t.format;
     }
 
@@ -638,9 +675,11 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
         VkDescriptorImageInfo  m31{clamp_, andromeda_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  hdr{clamp_, t.hdr.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo  volume{clamp_, t.volume.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorBufferInfo overlay{t.overlay[f].buffer, 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo  text{clamp_, textAtlas_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-        VkWriteDescriptorSet writes[6]{};
-        for (std::uint32_t i = 0; i < 6; ++i) {
+        VkWriteDescriptorSet writes[8]{};
+        for (std::uint32_t i = 0; i < 8; ++i) {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = t.sets[f];
             writes[i].dstBinding      = i;
@@ -658,7 +697,11 @@ void VulkanRenderer::BuildFrameResources(Target& t) {
         writes[4].pImageInfo     = &hdr;
         writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[5].pImageInfo     = &volume;
-        vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].pBufferInfo    = &overlay;
+        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[7].pImageInfo     = &text;
+        vkUpdateDescriptorSets(device, 8, writes, 0, nullptr);
     }
 
     t.stale = false;
@@ -687,9 +730,11 @@ void VulkanRenderer::DestroyTarget(Target& t) {
     VkDevice device = ctx_->device();
     DestroySwapchain(t);
     if (t.tonemap) vkDestroyPipeline(device, t.tonemap, nullptr);
+    if (t.overlayPipeline) vkDestroyPipeline(device, t.overlayPipeline, nullptr);
     for (std::uint32_t f = 0; f < kFramesInFlight; ++f) {
         if (t.acquired[f]) vkDestroySemaphore(device, t.acquired[f], nullptr);
         ctx_->Destroy(t.uniforms[f]);
+        ctx_->Destroy(t.overlay[f]);
         if (t.sets[f]) vkFreeDescriptorSets(device, pool_, 1, &t.sets[f]);
     }
     ctx_->Destroy(t.readback);
@@ -698,7 +743,7 @@ void VulkanRenderer::DestroyTarget(Target& t) {
 
 // ---- per frame -----------------------------------------------------------------------------
 
-void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms& u) const {
+void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms& u, OverlayView& o) const {
     const sim::Galaxy& g = sim::MilkyWay();
 
     const sim::CameraPose pose   = sim::OrbitCamera(seconds);
@@ -776,6 +821,20 @@ void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms
     u.m31Up[1]    = u2[1];
     u.m31Up[2]    = u2[2];
     u.m31Up[3]    = 1.0f;
+
+    // The same frame, for placing the overlays. The Sun keeps to its circular orbit.
+    o.viewProj = vp;
+    o.width    = float(t.extent.width);
+    o.height   = float(t.extent.height);
+    o.focal    = focal;
+    o.camPos   = pose.eye;
+    const float sunTheta = g.sunTheta - sim::AngularSpeed(g, g.sunR) * static_cast<float>(simMyr);
+    o.sol          = {g.sunR * std::cos(sunTheta), g.sunR * std::sin(sunTheta), 0.0f};
+    o.m31Dir       = {dir[0], dir[1], dir[2]};
+    o.m31Right     = {r2[0], r2[1], r2[2]};
+    o.m31Up        = {u2[0], u2[1], u2[2]};
+    o.m31HalfWidth = halfWidth;
+    o.m31Aspect    = aspectM31;
 }
 
 void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
@@ -872,6 +931,10 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t, bool first) {
     vkCmdBeginRendering(cmd, &pass);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, t.tonemap);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (t.overlayCount && t.overlayPipeline) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, t.overlayPipeline);
+        vkCmdDraw(cmd, t.overlayCount, 1, 0, 0);
+    }
     vkCmdEndRendering(cmd);
     Stamp(cmd, first, 5);
 
@@ -908,6 +971,8 @@ void VulkanRenderer::RenderFrame(double seconds) {
     std::vector<std::uint32_t>        indices;
 
     bool offscreen = false;
+    if (overlays_) overlays_->Advance(seconds);
+    OverlayView view;
     for (auto& t : targets_) {
         t->drawing = false;
         if (t->stale && !BuildSwapchain(*t)) continue;
@@ -916,8 +981,9 @@ void VulkanRenderer::RenderFrame(double seconds) {
             t->drawing    = true;
             offscreen     = true;
             FrameUniforms uniforms{};
-            FillUniforms(*t, seconds, uniforms);
+            FillUniforms(*t, seconds, uniforms, view);
             std::memcpy(t->uniforms[frame_].mapped, &uniforms, sizeof(uniforms));
+            BuildOverlay(*t, view);
             continue;
         }
         const VkResult r = vkAcquireNextImageKHR(device, t->swapchain, UINT64_MAX, t->acquired[frame_],
@@ -930,8 +996,9 @@ void VulkanRenderer::RenderFrame(double seconds) {
         t->drawing = true;
 
         FrameUniforms uniforms{};
-        FillUniforms(*t, seconds, uniforms);
+        FillUniforms(*t, seconds, uniforms, view);
         std::memcpy(t->uniforms[frame_].mapped, &uniforms, sizeof(uniforms));
+        BuildOverlay(*t, view);
 
         waits.push_back(t->acquired[frame_]);
         waitStages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -939,6 +1006,7 @@ void VulkanRenderer::RenderFrame(double seconds) {
         swapchains.push_back(t->swapchain);
         indices.push_back(t->imageIndex);
     }
+    if (overlays_) overlays_->EndFrame();
     if (swapchains.empty() && !offscreen) {
         Sleep(16);  // every window minimised or gone: idle at about the frame rate
         return;
@@ -999,6 +1067,15 @@ void VulkanRenderer::RenderFrame(double seconds) {
     FinishCaptures();
     frame_ = (frame_ + 1) % kFramesInFlight;
     ++frameCount_;
+}
+
+void VulkanRenderer::BuildOverlay(Target& t, const OverlayView& view) {
+    t.overlayCount = 0;
+    if (!overlays_) return;
+    overlayScratch_.clear();
+    overlays_->Emit(view, overlayScratch_);
+    t.overlayCount = static_cast<std::uint32_t>(std::min<std::size_t>(overlayScratch_.size(), kOverlayVertices));
+    std::memcpy(t.overlay[frame_].mapped, overlayScratch_.data(), t.overlayCount * sizeof(OverlayVertex));
 }
 
 void VulkanRenderer::FinishCaptures() {
