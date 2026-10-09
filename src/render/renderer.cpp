@@ -48,6 +48,10 @@ struct Target {
     VkExtent2D     extent{};
     bool           canCapture = false;
     bool           stale      = true;
+    // No presentable surface (or MILKY_WAY_OFFSCREEN): draw into `output` instead and never
+    // present. Captures and benchmarks still work, and the loop runs unthrottled.
+    bool           offscreen  = false;
+    Image          output;
 
     std::vector<VkImage>     images;
     std::vector<VkImageView> views;
@@ -89,6 +93,8 @@ private:
     VkPipeline     MakePipeline(const char* vert, const char* frag, VkFormat format, Blend blend,
                                 VkPrimitiveTopology topology);
     bool           BuildSwapchain(Target& t);
+    bool           BuildOffscreen(Target& t);
+    void           BuildFrameResources(Target& t);
     void           DestroySwapchain(Target& t);
     void           DestroyTarget(Target& t);
     void           FillUniforms(const Target& t, double seconds, FrameUniforms& u) const;
@@ -359,17 +365,17 @@ bool VulkanRenderer::Attach(HWND hwnd) {
     auto t  = std::make_unique<Target>();
     t->hwnd = hwnd;
 
-    VkWin32SurfaceCreateInfoKHR surfaceInfo{};
-    surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    surfaceInfo.hinstance = GetModuleHandleW(nullptr);
-    surfaceInfo.hwnd      = hwnd;
-    if (vkCreateWin32SurfaceKHR(ctx_->instance(), &surfaceInfo, nullptr, &t->surface) != VK_SUCCESS) return false;
-
-    VkBool32 supported = VK_FALSE;
-    vkGetPhysicalDeviceSurfaceSupportKHR(ctx_->physical(), ctx_->queueFamily(), t->surface, &supported);
-    if (!supported) {
-        vkDestroySurfaceKHR(ctx_->instance(), t->surface, nullptr);
-        return false;
+    t->offscreen = GetEnvironmentVariableW(L"MILKY_WAY_OFFSCREEN", nullptr, 0) > 0;
+    if (!t->offscreen) {
+        VkWin32SurfaceCreateInfoKHR surfaceInfo{};
+        surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+        surfaceInfo.hinstance = GetModuleHandleW(nullptr);
+        surfaceInfo.hwnd      = hwnd;
+        VkBool32 supported    = VK_FALSE;
+        if (vkCreateWin32SurfaceKHR(ctx_->instance(), &surfaceInfo, nullptr, &t->surface) == VK_SUCCESS) {
+            vkGetPhysicalDeviceSurfaceSupportKHR(ctx_->physical(), ctx_->queueFamily(), t->surface, &supported);
+        }
+        if (!supported) t->offscreen = true;
     }
 
     VkDevice device = ctx_->device();
@@ -415,10 +421,14 @@ bool VulkanRenderer::BuildSwapchain(Target& t) {
     VkDevice device = ctx_->device();
     vkDeviceWaitIdle(device);
 
+    if (t.offscreen) return BuildOffscreen(t);
+
     VkSurfaceCapabilitiesKHR caps{};
     if (const VkResult r = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx_->physical(), t.surface, &caps); r != VK_SUCCESS) {
-        app::Log("window %p: surface capabilities failed: %d", static_cast<void*>(t.hwnd), r);
-        return false;
+        // Seen from some non-interactive sessions: the surface exists but can't be queried.
+        app::Log("window %p: surface capabilities failed (%d), drawing offscreen", static_cast<void*>(t.hwnd), r);
+        t.offscreen = true;
+        return BuildOffscreen(t);
     }
     VkExtent2D extent = caps.currentExtent;
     if (extent.width == 0xFFFFFFFFu) {
@@ -498,6 +508,37 @@ bool VulkanRenderer::BuildSwapchain(Target& t) {
         t.rendered.push_back(sem);
     }
 
+    BuildFrameResources(t);
+    app::Log("window %p: swapchain %ux%u, format %d, %u images", static_cast<void*>(t.hwnd), extent.width,
+             extent.height, t.format, count);
+    return true;
+}
+
+bool VulkanRenderer::BuildOffscreen(Target& t) {
+    vkDeviceWaitIdle(ctx_->device());
+    RECT rc{};
+    GetClientRect(t.hwnd, &rc);
+    VkExtent2D extent{static_cast<std::uint32_t>(rc.right), static_cast<std::uint32_t>(rc.bottom)};
+    if (extent.width == 0 || extent.height == 0) extent = {1600, 900};
+
+    DestroySwapchain(t);
+    t.output = ctx_->CreateImage(extent, VK_FORMAT_B8G8R8A8_UNORM,
+                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    t.format     = VK_FORMAT_B8G8R8A8_UNORM;
+    t.extent     = extent;
+    t.canCapture = true;
+    t.images     = {t.output.image};
+    t.views      = {t.output.view};
+    BuildFrameResources(t);
+    app::Log("window %p: offscreen %ux%u", static_cast<void*>(t.hwnd), extent.width, extent.height);
+    return true;
+}
+
+// What every target needs whatever it draws into: the HDR scene, its tonemap and descriptors.
+void VulkanRenderer::BuildFrameResources(Target& t) {
+    VkDevice         device = ctx_->device();
+    const VkExtent2D extent = t.extent;
+
     // The bloom samples mips 1..6 of the scene; small windows get as many as fit.
     std::uint32_t mips = 1;
     while (mips < kBloomMips && (std::min(extent.width, extent.height) >> mips) >= 4) ++mips;
@@ -548,14 +589,15 @@ bool VulkanRenderer::BuildSwapchain(Target& t) {
     }
 
     t.stale = false;
-    app::Log("window %p: swapchain %ux%u, format %d, %u images", static_cast<void*>(t.hwnd), extent.width,
-             extent.height, t.format, count);
-    return true;
 }
 
 void VulkanRenderer::DestroySwapchain(Target& t) {
     VkDevice device = ctx_->device();
-    for (VkImageView v : t.views) vkDestroyImageView(device, v, nullptr);
+    if (t.output.image) {
+        ctx_->Destroy(t.output);  // owns the one view in `views`
+    } else {
+        for (VkImageView v : t.views) vkDestroyImageView(device, v, nullptr);
+    }
     for (VkSemaphore s : t.rendered) vkDestroySemaphore(device, s, nullptr);
     t.views.clear();
     t.rendered.clear();
@@ -727,6 +769,8 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
     vkCmdEndRendering(cmd);
 
     // 4. A capture copies the finished image out before it is presented.
+    const VkImageLayout finalLayout =
+        t.offscreen ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     if (!t.captureTo.empty() && t.canCapture) {
         const VkDeviceSize bytes = VkDeviceSize(t.extent.width) * t.extent.height * 4;
         if (t.readback.size < bytes) {
@@ -738,9 +782,9 @@ void VulkanRenderer::Record(VkCommandBuffer cmd, Target& t) {
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageExtent      = {t.extent.width, t.extent.height, 1};
         vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, t.readback.buffer, 1, &copy);
-        Transition(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        if (!t.offscreen) Transition(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, finalLayout);
     } else {
-        Transition(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        Transition(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, finalLayout);
     }
 }
 
@@ -754,9 +798,19 @@ void VulkanRenderer::RenderFrame(double seconds) {
     std::vector<VkSwapchainKHR>       swapchains;
     std::vector<std::uint32_t>        indices;
 
+    bool offscreen = false;
     for (auto& t : targets_) {
         t->drawing = false;
         if (t->stale && !BuildSwapchain(*t)) continue;
+        if (t->offscreen) {
+            t->imageIndex = 0;
+            t->drawing    = true;
+            offscreen     = true;
+            FrameUniforms uniforms{};
+            FillUniforms(*t, seconds, uniforms);
+            std::memcpy(t->uniforms[frame_].mapped, &uniforms, sizeof(uniforms));
+            continue;
+        }
         const VkResult r = vkAcquireNextImageKHR(device, t->swapchain, UINT64_MAX, t->acquired[frame_],
                                                  VK_NULL_HANDLE, &t->imageIndex);
         if (r == VK_ERROR_OUT_OF_DATE_KHR) {
@@ -776,7 +830,7 @@ void VulkanRenderer::RenderFrame(double seconds) {
         swapchains.push_back(t->swapchain);
         indices.push_back(t->imageIndex);
     }
-    if (swapchains.empty()) {
+    if (swapchains.empty() && !offscreen) {
         Sleep(16);  // every window minimised or gone: idle at about the frame rate
         return;
     }
@@ -804,6 +858,13 @@ void VulkanRenderer::RenderFrame(double seconds) {
     submit.pSignalSemaphores    = signals.data();
     vkQueueSubmit(ctx_->queue(), 1, &submit, fences_[frame_]);
 
+    if (swapchains.empty()) {  // offscreen only: nothing to present
+        FinishCaptures();
+        frame_ = (frame_ + 1) % kFramesInFlight;
+        ++frameCount_;
+        return;
+    }
+
     // All windows present together, so several monitors stay in step.
     std::vector<VkResult> results(swapchains.size());
     VkPresentInfoKHR      present{};
@@ -817,7 +878,7 @@ void VulkanRenderer::RenderFrame(double seconds) {
     vkQueuePresentKHR(ctx_->queue(), &present);
     std::size_t k = 0;
     for (auto& t : targets_) {
-        if (!t->drawing) continue;
+        if (!t->drawing || t->offscreen) continue;
         if (results[k] == VK_ERROR_OUT_OF_DATE_KHR || results[k] == VK_SUBOPTIMAL_KHR) t->stale = true;
         ++k;
     }

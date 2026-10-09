@@ -88,3 +88,13 @@ target_compile_options(saver PRIVATE
 
 target_link_options(saver PRIVATE -municode -static)
 target_link_libraries(saver PRIVATE gdi32 shell32 user32 ole32 windowscodecs)
+
+# ---- tests -----------------------------------------------------------------------------
+# One small check, of the claim that matters most: the Galaxy turns the right way on screen.
+
+enable_testing()
+add_executable(rotation_test tests/rotation_test.cpp src/sim/galaxy.cpp src/sim/camera.cpp)
+target_include_directories(rotation_test PRIVATE src)
+target_compile_options(rotation_test PRIVATE -Wall -Wextra)
+target_link_options(rotation_test PRIVATE -static)
+add_test(NAME rotation COMMAND rotation_test)
