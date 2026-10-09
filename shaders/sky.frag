@@ -61,7 +61,7 @@ vec3 haloStars(vec3 d, float cells, float density, float seed) {
 // shifted differently so the single image never visibly repeats.
 vec3 distantGalaxies(vec3 d) {
     float face;
-    vec2  uv   = cubeFace(d, face) * 5.0;
+    vec2  uv   = cubeFace(d, face) * 9.0;
     vec2  cell = floor(uv);
     vec2  f    = fract(uv) - 0.5;
     vec2  h    = hash22(cell + face * 17.0);
@@ -72,7 +72,7 @@ vec3 distantGalaxies(vec3 d) {
     // The deep field's sky is not quite black; lift it out so only the galaxies remain. The tile
     // edges fade so seams never show.
     vec2  edge = smoothstep(0.5, 0.40, abs(f));
-    return max(c - 0.035, 0.0) * 0.55 * edge.x * edge.y;
+    return max(c - 0.035, 0.0) * 0.4 * edge.x * edge.y;
 }
 
 vec3 andromedaGalaxy(vec3 d) {
@@ -80,11 +80,12 @@ vec3 andromedaGalaxy(vec3 d) {
     if (facing <= 0.0) return vec3(0.0);
     vec2 plane = vec2(dot(d, frame.m31Right.xyz), dot(d, frame.m31Up.xyz)) / facing;
     vec2 uv    = plane / vec2(frame.m31Dir.w, frame.m31Dir.w * frame.m31Right.w) * 0.5 + 0.5;
+    uv.y += 0.119;  // the nucleus is 62% of the way down the prepared image: centre on it
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
     vec3 c = texture(andromeda, uv).rgb;
     // Soft edges: the mosaic's rectangle must not show against the black.
     vec2 edge = smoothstep(vec2(0.0), vec2(0.06, 0.12), uv) * smoothstep(vec2(0.0), vec2(0.06, 0.12), 1.0 - uv);
-    return max(c - 0.02, 0.0) * 1.3 * edge.x * edge.y * frame.m31Up.w;
+    return max(c - 0.02, 0.0) * 2.6 * edge.x * edge.y * frame.m31Up.w;
 }
 
 void main() {

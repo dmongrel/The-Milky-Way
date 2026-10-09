@@ -746,7 +746,7 @@ void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms
     // Andromeda at Galactic l = 121.17, b = -21.57 degrees. In this frame the Sun sits on -y, so
     // the direction to the Galactic centre is +y, toward l = 90 (the way the Sun moves) is -x, and
     // the North Galactic Pole is +z. At 765 kpc its direction is the same from anywhere the camera
-    // goes. Its image is drawn about three times its true 3.2-degree length so it reads on screen.
+    // goes. Its image is drawn about five times its true 3.2-degree length so it reads on screen.
     const float l = 121.17f * sim::kPi / 180.0f, b = -21.57f * sim::kPi / 180.0f;
     const float dir[3] = {-std::cos(b) * std::sin(l), std::cos(b) * std::cos(l), std::sin(b)};
     float       right[3] = {dir[1], -dir[0], 0.0f};  // horizontal, perpendicular to the direction
@@ -762,7 +762,7 @@ void VulkanRenderer::FillUniforms(const Target& t, double seconds, FrameUniforms
         r2[k] = c * right[k] + s * up[k];
         u2[k] = -s * right[k] + c * up[k];
     }
-    const float halfWidth = 5.0f * sim::kPi / 180.0f;
+    const float halfWidth = 8.0f * sim::kPi / 180.0f;
     const float aspectM31 = andromeda_.extent.width ? float(andromeda_.extent.height) / andromeda_.extent.width : 1.0f;
     u.m31Dir[0]   = dir[0];
     u.m31Dir[1]   = dir[1];

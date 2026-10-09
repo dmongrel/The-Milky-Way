@@ -22,8 +22,8 @@ constexpr float kPi = 3.14159265358979f;
 constexpr float kRadPerMyrPerKmsKpc = 1.0227e-3f;
 
 // The simulation clock: two million years per second. The Sun's 215 Myr orbit then takes under
-// two minutes, the bar turns once in about 80 s, the arms in about 130 s, and stars within a
-// kiloparsec of the centre lap it in 10 to 30 s, so both the centre and the arms visibly move.
+// two minutes, the bar turns once in about 80 s, the arms in about 128 s, and stars within a
+// kiloparsec of the centre lap it in 12 to 16 s, so both the centre and the arms visibly move.
 constexpr double kMyrPerSecond = 2.0;
 
 // A spiral arm: a log-periodic spiral with one kink, after Reid et al. 2019, extended beyond the

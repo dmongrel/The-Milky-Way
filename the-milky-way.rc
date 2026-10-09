@@ -13,3 +13,8 @@ IDR_OVERLAY_FONT RCDATA "assets/fonts/Michroma-Regular.ttf"
 IDR_FONT_LICENSE RCDATA "assets/fonts/Michroma-OFL.txt"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "the-milky-way.manifest"
+
+// The background sky: NASA/ESA Hubble images, public domain with credit (THIRD_PARTY_NOTICES.md).
+// Prepared from the originals by tools/prepare_sky.py.
+IDR_DEEP_FIELD RCDATA "assets/sky/deep-field.jpg"
+IDR_ANDROMEDA  RCDATA "assets/sky/andromeda.jpg"
