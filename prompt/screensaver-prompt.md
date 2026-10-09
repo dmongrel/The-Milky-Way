@@ -2,7 +2,8 @@
 
 <!--
 Operator notes (not part of the prompt; strip everything above the first rule line before use):
-- Replace every <LLM NAME> with the model's name, e.g. "Qwen3.5-122B" or "Claude Opus 5.5".
+- Replace every <LLM NAME> with the model's name, e.g. "qwen122b" gives the project directory
+  C:\_C_Projects\The Milky Way-qwen122b.
 - The prompt is given verbatim, in one piece, to every model under test, so results compare.
 - Stage 1 (this file, so far) is the scaffold only. Later stages get appended as new sections.
 -->
@@ -30,17 +31,16 @@ Everything you create goes inside that directory. Do not modify any file outside
 Two names derived from the model name are used below:
 
 - **`<slug>`**: the model name lowercased, with every run of characters outside `a-z 0-9`
-  replaced by a single `-`, and no leading or trailing `-`. "Qwen3.5-122B" becomes `qwen3-5-122b`.
+  replaced by a single `-`, and no leading or trailing `-`. "qwen122b" stays `qwen122b`;
+  "Qwen3.5-122B" becomes `qwen3-5-122b`.
 - **`<repo>`**: `The-Milky-Way-` followed by the model name with every character outside
   `A-Z a-z 0-9 . _ -` replaced by `-`.
 
 ### What you may read
 
-- `C:\_C_Projects\The Black Hole` is a finished screen saver built the same way this one will be
-  (same language, toolchain, graphics API and font). It is your technical reference: read it
-  freely. You may copy its third-party files listed in section 4. Anything else you take from it
-  you must understand, and adapt where this specification differs. You will be judged on the code
-  you ship, wherever it came from.
+- From `C:\_C_Projects\The Black Hole`, only the third-party files listed in section 4: the
+  Michroma font with its licence, and volk. Copy them; do not open anything else in that
+  directory. Every other line of the project is yours to write.
 - Do **not** read `C:\_C_Projects\The Milky Way` or any other `The Milky Way-*` directory. Those
   are other entries in the comparison.
 
