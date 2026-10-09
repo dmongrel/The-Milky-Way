@@ -43,6 +43,13 @@ docs/               design notes
 tools/              build helpers
 ```
 
+## LLM testbed
+
+This project is also a testbed for judging how well different models write code.
+[prompt/screensaver-prompt.md](prompt/screensaver-prompt.md) is given unchanged to Claude and to
+local LLMs. Each model builds its own sibling project, `C:\_C_Projects\The Milky Way-<LLM NAME>`,
+from that prompt, so the projects can be compared.
+
 The Black Hole (`C:\_C_Projects\The Black Hole`) is the technical reference for the Vulkan
 renderer and the text overlay.
 
