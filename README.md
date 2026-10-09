@@ -1,57 +1,48 @@
 # The Milky Way
 
-A Windows screen saver of the Milky Way, rendered with Vulkan. On-screen overlays are set in
-Michroma, the typeface The Black Hole uses.
+A Windows screen saver of the Milky Way, rendered with Vulkan, and a testbed for judging how well
+different AI models write code.
 
-Status: scaffold. The screen-saver shell works (full screen on every monitor, the Settings
-preview pane, a development window, dismissal on input); the windows are black until the
-renderer lands. The build already compiles the shaders to SPIR-V and embeds them, links volk,
-and embeds the font and its licence.
+This directory is the **template**. It holds the build, the third-party dependencies and the
+prompt, and no screen-saver code of its own. Each model under test copies it to
+`C:\_C_Projects\The Milky Way-<LLM NAME>` and builds the saver there from
+[prompt.md](prompt.md), so every entry starts from the same files and can be compared.
+
+## Running a model
+
+1. Replace every `<LLM NAME>` in [prompt.md](prompt.md) with the model's name. `qwen122b` gives
+   the project `C:\_C_Projects\The Milky Way-qwen122b` and the repo `dmongrel/The-Milky-Way-qwen122b`.
+2. Give the model the whole prompt, unchanged otherwise.
+
+The prompt tells the model to copy this template, set up git and a private GitHub repo, build the
+first stage, verify it, and report.
+
+## What the template contains
+
+```
+CMakeLists.txt                 the build: C++20, volk, resources, shaders -> embedded SPIR-V
+cmake/EmbedShaders.cmake       SPIR-V files -> one generated C file
+src/main.cpp                   stub wWinMain that exits 0
+src/resource.h                 resource ids
+src/render/shaders_embedded.*  look up an embedded shader by name
+shaders/                       full-screen triangle, black placeholder fragment shader
+assets/fonts/                  Michroma, the overlay font, and its OFL licence
+third_party/volk/              Vulkan loader
+the-milky-way.rc, .manifest    Settings-list name, embedded font and licence, DPI awareness
+prompt.md                      the build prompt
+```
 
 ## Building
 
-MSYS2 UCRT64 with `mingw-w64-ucrt-x86_64-gcc`, `mingw-w64-ucrt-x86_64-shaderc` (for `glslc`),
-`xxd` and `make`:
+MSYS2 UCRT64 (`gcc`, `g++`, `windres`, `glslc` from `mingw-w64-ucrt-x86_64-shaderc`) on `PATH`,
+plus CMake and Ninja (CLion's bundled copies work):
 
 ```sh
-make            # builds the-milky-way.scr
-make install    # copies it to %LOCALAPPDATA%\The-Milky-Way and selects it as the screen saver
-make clean
+cmake -S . -B build -G Ninja
+cmake --build build
 ```
 
-## Running
-
-| Argument      | Mode                                                        |
-|---------------|-------------------------------------------------------------|
-| *(none)*, `/s`| Full screen on every monitor; any input ends it             |
-| `/p <hwnd>`   | Live preview in the Screen Saver Settings pane              |
-| `/c`          | Settings (none yet)                                         |
-| `/w`          | Resizable development window; Esc closes it                 |
-
-`MILKY_WAY_LOG=1` writes a trace to `%TEMP%\the-milky-way.log`; any other value is a path.
-
-## Layout
-
-```
-src/main.cpp        argument dispatch
-src/app/            screen-saver host: args, windows, input, log
-src/render/         renderer; for now only the embedded-shader lookup
-shaders/            GLSL, compiled by glslc and embedded in the .scr
-assets/fonts/       Michroma and its OFL licence, embedded in the .scr
-third_party/volk/   Vulkan loader
-docs/               design notes
-tools/              build helpers
-```
-
-## LLM testbed
-
-This project is also a testbed for judging how well different models write code.
-[prompt/screensaver-prompt.md](prompt/screensaver-prompt.md) is given unchanged to Claude and to
-local LLMs. Each model builds its own sibling project, `C:\_C_Projects\The Milky Way-<LLM NAME>`,
-from that prompt, so the projects can be compared.
-
-The Black Hole (`C:\_C_Projects\The Black Hole`) is the technical reference for the Vulkan
-renderer and the text overlay.
+The template builds `build/the-milky-way.scr`, which does nothing but exit.
 
 ## License
 

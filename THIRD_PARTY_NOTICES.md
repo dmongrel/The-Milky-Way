@@ -12,7 +12,7 @@ Licensed under the SIL Open Font License, Version 1.1. The full licence is
 because OFL section 2 requires the licence to travel with the font, and a licence left in the
 repository would not reach anyone who has only the screen saver.
 
-The font sets every on-screen overlay. It is the same file The Black Hole uses, version 1.100,
+The font sets every on-screen overlay. The file is version 1.100,
 taken unmodified from `google/fonts@main/ofl/michroma`:
 
     file    assets/fonts/Michroma-Regular.ttf

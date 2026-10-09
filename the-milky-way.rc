@@ -1,5 +1,5 @@
 #include <windows.h>
-#include "src/app/resource.h"
+#include "src/resource.h"
 
 // String 1 is the name Windows shows in the Screen Saver Settings list.
 STRINGTABLE
