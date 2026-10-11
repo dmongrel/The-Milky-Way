@@ -3,8 +3,9 @@
 You are building a Windows screen saver called **The Milky Way**: a simulation of our galaxy, seen
 from a camera orbiting it. Your build is one entry in a comparison: several AI models receive this
 same prompt, and each one's project is judged on the quality of its code, its correctness, how
-good the result looks, and how faithfully it follows this specification. Read the whole prompt
-before you do anything.
+good the result looks, and how faithfully it follows this specification. Read the whole prompt,
+and `prompt-addendum.md` beside it, before you do anything. The addendum's rules apply on top
+of this prompt and win where the two disagree.
 
 Your model name for this run is **<LLM NAME>**.
 

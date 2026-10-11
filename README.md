@@ -34,6 +34,7 @@ assets/fonts/                  Michroma, the overlay font, and its OFL licence
 third_party/volk/              Vulkan loader
 the-milky-way.rc, .manifest    Settings-list name, embedded font and licence, DPI awareness
 prompt.md                      the build prompt
+prompt-addendum.md             rules on top of the prompt, from mistakes earlier runs made
 ```
 
 ## Building
