@@ -65,7 +65,10 @@ vec3 emissionAndDust(vec3 p, out float dust) {
     vec3  b = abs(vec3(q, p.z)) / vec3(1.05, 0.48, 0.42);
     float boxy = pow(b.x * b.x * b.x + b.y * b.y * b.y + b.z * b.z * b.z, 1.0 / 3.0);  // boxy, not round
     float bulge = exp(-boxy * 1.6) * 1.9;
-    float longBar = exp(-pow(abs(q.x) / 4.6, 6.0)) * exp(-pow(q.y / 0.42, 2.0)) * exp(-pow(p.z / 0.18, 2.0)) * 0.32;
+    // Squares written out: pow() of a negative base is undefined, and NaN on some drivers.
+    vec3  lb = vec3(abs(q.x) / 4.6, q.y / 0.42, p.z / 0.18);
+    float lb3 = lb.x * lb.x * lb.x;
+    float longBar = exp(-lb3 * lb3) * exp(-lb.y * lb.y) * exp(-lb.z * lb.z) * 0.32;
     float nucleus = exp(-length(p) / 0.09) * 6.0;
     light += BULGE_COLOUR * (bulge + longBar + nucleus);
 
@@ -126,5 +129,10 @@ void main() {
     } else {
         march(ro, rd, thick.x, thick.y, STEPS_THICK, jitter, light, trans);
     }
-    outColor = vec4(light * 0.25, trans);
+    // One NaN here would spread through the bloom over the whole screen: drop it.
+    if (any(isnan(light)) || any(isinf(light)) || isnan(trans)) {
+        light = vec3(0.0);
+        trans = 1.0;
+    }
+    outColor = vec4(min(light * 0.25, vec3(1e4)), clamp(trans, 0.0, 1.0));
 }

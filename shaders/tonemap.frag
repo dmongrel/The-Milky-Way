@@ -16,11 +16,17 @@ vec3 aces(vec3 x) {
 }
 
 vec3 toSrgb(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
 }
 
+// A NaN goes to black and an infinity to a large finite value, or either would blank the frame.
+vec3 finite(vec3 v) {
+    return any(isnan(v)) ? vec3(0.0) : min(max(v, vec3(0.0)), vec3(6e4));
+}
+
 void main() {
-    vec3 hdr = textureLod(scene, vUV, 0.0).rgb;
+    vec3 hdr = finite(textureLod(scene, vUV, 0.0).rgb);
 
     // Wide, soft glow: each coarser mip spreads light further.
     float levels = float(textureQueryLevels(scene));
@@ -29,7 +35,7 @@ void main() {
     for (float lod = 1.0; lod < 7.0; lod += 1.0) {
         if (lod >= levels) break;
         float w = 1.0 / lod;
-        bloom += textureLod(scene, vUV, lod).rgb * w;
+        bloom += finite(textureLod(scene, vUV, lod).rgb) * w;
         weight += w;
     }
     if (weight > 0.0) hdr += bloom / weight * 0.35;

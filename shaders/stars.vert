@@ -106,7 +106,7 @@ void main() {
         return;
     }
 
-    float dist = length(pos - frame.camPos.xyz);
+    float dist = max(length(pos - frame.camPos.xyz), 1e-3);
     float flux = luminosity * exp(-extinction(pos)) / (dist * dist);
 
     // Stars are unresolved: about two pixels at 1080p, scaled with the window. HII regions are
@@ -124,6 +124,6 @@ void main() {
 
     // The sprite's energy is fixed whatever its size, so a big sprite is a dim one.
     float energy = flux * 220.0 / max(px * px, 1.0);
-    vColor = b.rgb * energy;
+    vColor = min(b.rgb * energy, vec3(1e3));
     vSoft = soft;
 }
