@@ -74,7 +74,7 @@ set_target_properties(saver PROPERTIES OUTPUT_NAME ${SAVER_NAME} SUFFIX ".scr")
 # windres resolves the RCDATA file names against the include path, and does not track them.
 target_include_directories(saver PRIVATE src third_party/volk ${CMAKE_SOURCE_DIR})
 set_source_files_properties(the-milky-way.rc PROPERTIES OBJECT_DEPENDS
-    "${CMAKE_SOURCE_DIR}/the-milky-way.manifest;${CMAKE_SOURCE_DIR}/src/resource.h;${CMAKE_SOURCE_DIR}/assets/fonts/Michroma-Regular.ttf;${CMAKE_SOURCE_DIR}/assets/fonts/Michroma-OFL.txt")
+    "${CMAKE_SOURCE_DIR}/the-milky-way.manifest;${CMAKE_SOURCE_DIR}/src/resource.h;${CMAKE_SOURCE_DIR}/assets/fonts/Michroma-Regular.ttf;${CMAKE_SOURCE_DIR}/assets/fonts/Michroma-OFL.txt;${CMAKE_SOURCE_DIR}/assets/sky/deep-field.jpg;${CMAKE_SOURCE_DIR}/assets/sky/andromeda.jpg")
 
 # VK_NO_PROTOTYPES: nothing static-imports vulkan-1.dll; every entry point comes from volk at
 # run time, so a machine without a Vulkan driver still starts the saver.
@@ -87,4 +87,14 @@ target_compile_options(saver PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-municode>)
 
 target_link_options(saver PRIVATE -municode -static)
-target_link_libraries(saver PRIVATE gdi32 shell32 user32)
+target_link_libraries(saver PRIVATE gdi32 shell32 user32 ole32 windowscodecs)
+
+# ---- tests -----------------------------------------------------------------------------
+# One small check, of the claim that matters most: the Galaxy turns the right way on screen.
+
+enable_testing()
+add_executable(rotation_test tests/rotation_test.cpp src/sim/galaxy.cpp src/sim/camera.cpp)
+target_include_directories(rotation_test PRIVATE src)
+target_compile_options(rotation_test PRIVATE -Wall -Wextra)
+target_link_options(rotation_test PRIVATE -static)
+add_test(NAME rotation COMMAND rotation_test)
