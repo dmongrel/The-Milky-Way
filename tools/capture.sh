@@ -5,7 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 prefix=$1; shift
-C=/c/Users/jcaes/AppData/Local/Programs/CLion/bin
+# CLion's bundled CMake and Ninja, normally C:\Users\<username>\AppData\Local\Programs\CLion\bin;
+# set CLION_BIN to use another install.
+C="${CLION_BIN:-$(cygpath -u "$LOCALAPPDATA")/Programs/CLion/bin}"
 export PATH="/c/msys64/ucrt64/bin:$C/ninja/win/x64:$C/cmake/win/x64/bin:$PATH"
 cmake --build build | grep -E "warning|error" && exit 1
 mkdir -p docs/captures
